@@ -14,7 +14,6 @@ from vacuumworld.model.actions.vweffort import VWActionEffort
 from vacuumworld.model.actor.mind.surrogate.vwactor_mind_surrogate import (
     VWActorMindSurrogate,
 )
-import numpy as np
 
 
 class ZigZagMind(VWActorMindSurrogate):
@@ -194,7 +193,12 @@ class ZigZagMind(VWActorMindSurrogate):
 
         # flip horizontal and rotate -90deg to flip x y axis in array representation
         print("Agent internal map: 0 = empty cell, 1 = orange dirt, 2 = green dirt")
-        print(np.rot90(np.flip(np.array(self.__map), axis=1), 1))
+        grid_str: str = ""
+        for x in range(self.__n):
+            for y in range(self.__n):
+                grid_str += f"{self.__map[y][x]} "
+            grid_str += "\n"
+        print(grid_str)
 
     def revise(self) -> None:
         if self.__stage == 1:
