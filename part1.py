@@ -3,12 +3,13 @@ from typing import Iterable
 from pyoptional.pyoptional import PyOptional
 
 from vacuumworld import run
+from vacuumworld.common.vworientation import VWOrientation
+from vacuumworld.common.vwdirection import VWDirection
 from vacuumworld.model.actions.vwactions import VWAction
 from vacuumworld.model.actions.vwidle_action import VWIdleAction
 from vacuumworld.model.actions.vwmove_action import VWMoveAction
 from vacuumworld.model.actions.vwturn_action import VWTurnAction
 from vacuumworld.model.environment.vwlocation import VWLocation
-from vacuumworld.common.vwdirection import VWDirection
 from vacuumworld.model.actions.vweffort import VWActionEffort
 from vacuumworld.model.actor.mind.surrogate.vwactor_mind_surrogate import (
     VWActorMindSurrogate,
@@ -221,34 +222,10 @@ class ZigZagMind(VWActorMindSurrogate):
 
     ### DECIDE FUNCTIONS ###
 
-    def __go_towards_east(self) -> Iterable[VWAction]:
-        if self.get_own_appearance().is_facing_east():
+    def __go_towards(self, orientation: VWOrientation) -> Iterable[VWAction]:
+        if self.get_own_appearance().is_facing(orientation):
             return [VWMoveAction()]
-        elif self.get_own_appearance().is_facing_north():
-            return [VWTurnAction(VWDirection.right)]
-        else:
-            return [VWTurnAction(VWDirection.left)]
-
-    def __go_towards_south(self) -> Iterable[VWAction]:
-        if self.get_own_appearance().is_facing_south():
-            return [VWMoveAction()]
-        elif self.get_own_appearance().is_facing_east():
-            return [VWTurnAction(VWDirection.right)]
-        else:
-            return [VWTurnAction(VWDirection.left)]
-
-    def __go_towards_west(self) -> Iterable[VWAction]:
-        if self.get_own_appearance().is_facing_west():
-            return [VWMoveAction()]
-        elif self.get_own_appearance().is_facing_south():
-            return [VWTurnAction(VWDirection.right)]
-        else:
-            return [VWTurnAction(VWDirection.left)]
-
-    def __go_towards_north(self) -> Iterable[VWAction]:
-        if self.get_own_appearance().is_facing_north():
-            return [VWMoveAction()]
-        elif self.get_own_appearance().is_facing_west():
+        elif self.get_own_appearance().is_facing(orientation.get_left()):
             return [VWTurnAction(VWDirection.right)]
         else:
             return [VWTurnAction(VWDirection.left)]
@@ -258,15 +235,15 @@ class ZigZagMind(VWActorMindSurrogate):
         # if scan_pass is even go west, odd go east, if intermission scan go north
         if self.__started_scan:
             if self.__scan_inter:
-                return self.__go_towards_north()
+                return self.__go_towards(VWOrientation.north)
             if self.__scan_pass % 2 == 0:
-                return self.__go_towards_west()
+                return self.__go_towards(VWOrientation.west)
             else:
-                return self.__go_towards_east()
+                return self.__go_towards(VWOrientation.east)
 
         # if start scan criteria not met, try to turn east
         if not self.get_own_appearance().is_facing_east():
-            return self.__go_towards_east()
+            return self.__go_towards(VWOrientation.east)
 
         return [VWIdleAction()]
 
@@ -275,17 +252,17 @@ class ZigZagMind(VWActorMindSurrogate):
         # now go until one cell away from south edge
         if not self.__at_one_cell_from_south_edge:
             if not self.__start_at_south_edge:
-                return self.__go_towards_south()
+                return self.__go_towards(VWOrientation.south)
             else:
-                return self.__go_towards_north()
+                return self.__go_towards(VWOrientation.north)
 
         # If this code line is reachable, robot is oriented properly
         # now go until one cell away from east edge
         if not self.__at_one_cell_from_east_edge:
             if not self.__start_at_east_edge:
-                return self.__go_towards_east()
+                return self.__go_towards(VWOrientation.east)
             else:
-                return self.__go_towards_west()
+                return self.__go_towards(VWOrientation.west)
 
         return [VWIdleAction()]
 
