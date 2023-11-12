@@ -57,27 +57,9 @@ class ZigZagMind(VWActorMindSurrogate):
 
     ### REVISE FUNCTIONS ###
 
-    def __is_one_step_from_east_wall(self) -> bool:
+    def __is_one_step_from_wall(self, orientation: VWOrientation) -> bool:
         return (
-            self.get_own_appearance().is_facing_east()
-            and self.get_latest_observation().is_wall_one_step_ahead()
-        )
-
-    def __is_one_step_from_south_wall(self) -> bool:
-        return (
-            self.get_own_appearance().is_facing_south()
-            and self.get_latest_observation().is_wall_one_step_ahead()
-        )
-
-    def __is_one_step_from_west_wall(self) -> bool:
-        return (
-            self.get_own_appearance().is_facing_west()
-            and self.get_latest_observation().is_wall_one_step_ahead()
-        )
-
-    def __is_one_step_from_north_wall(self) -> bool:
-        return (
-            self.get_own_appearance().is_facing_north()
+            self.get_own_appearance().is_facing(orientation)
             and self.get_latest_observation().is_wall_one_step_ahead()
         )
 
@@ -111,7 +93,7 @@ class ZigZagMind(VWActorMindSurrogate):
     def __revise_stage_0(self) -> None:
         # if not start at east edge, should be going east until one cell away from east edge
         if not self.__start_at_east_edge:
-            if self.__is_one_step_from_east_wall():
+            if self.__is_one_step_from_wall(VWOrientation.east):
                 self.__n = self.get_own_position().get_x() + 2
                 self.__at_one_cell_from_east_edge = True
         else:
@@ -120,7 +102,7 @@ class ZigZagMind(VWActorMindSurrogate):
 
         # if not start at south edge, should be going north until one cell away from south edge
         if not self.__start_at_south_edge:
-            if self.__is_one_step_from_south_wall():
+            if self.__is_one_step_from_wall(VWOrientation.south):
                 self.__at_one_cell_from_south_edge = True
         else:
             if self.get_own_position().get_y() == (self.__n - 2):
@@ -159,19 +141,23 @@ class ZigZagMind(VWActorMindSurrogate):
 
     def __scan_grid(self) -> None:
         # if scanning west and one step from west wall, start going north for at most 3 cells
-        if self.__scan_pass % 2 == 0 and self.__is_one_step_from_west_wall():
+        if self.__scan_pass % 2 == 0 and self.__is_one_step_from_wall(
+            VWOrientation.west
+        ):
             self.__scan_inter = True
             self.__scan_inter_start = self.get_own_position().get_y()
 
         # similar to west wall condition above, start going north for at most 3 cells
-        if self.__scan_pass % 2 == 1 and self.__is_one_step_from_east_wall():
+        if self.__scan_pass % 2 == 1 and self.__is_one_step_from_wall(
+            VWOrientation.east
+        ):
             self.__scan_inter = True
             self.__scan_inter_start = self.get_own_position().get_y()
 
         # if need to go north, stop if one step away from north wall or 3 cells above last pass
         if self.__scan_inter and (
             self.__scan_inter_start - self.get_own_position().get_y() > 2
-            or self.__is_one_step_from_north_wall()
+            or self.__is_one_step_from_wall(VWOrientation.north)
         ):
             self.__scan_inter = False
             self.__scan_pass += 1
