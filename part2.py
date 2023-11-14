@@ -4,6 +4,7 @@ import json
 from typing import Iterable
 from pyoptional.pyoptional import PyOptional
 
+from pystarworldsturbo.common.message import BccMessage
 from vacuumworld import run
 from vacuumworld.common.vwcoordinates import VWCoord
 from vacuumworld.common.vwobservation import VWObservation
@@ -276,18 +277,36 @@ class ZigZagMind(VWActorMindSurrogate):
         left_loc: PyOptional[VWLocation],
         right_loc: PyOptional[VWLocation],
     ) -> VWCoord:
+        own_pos: VWCoord = self.get_own_position()
+        print(my_orient)
+        if my_orient == VWOrientation.east:
+            one_step_forward_coord = VWCoord(own_pos.get_x() + 2, (own_pos.get_y()))
+        elif my_orient == VWOrientation.south:
+            one_step_forward_coord = VWCoord(own_pos.get_x(), (own_pos.get_y() + 2))
+        elif my_orient == VWOrientation.west:
+            one_step_forward_coord = VWCoord(own_pos.get_x() - 2, (own_pos.get_y()))
+        else:
+            one_step_forward_coord = VWCoord(own_pos.get_x(), (own_pos.get_y() - 2))
+
         # if self and other agent face same direction, find empty fl or fr cell
-        if actor_orient == my_orient or actor_orient == my_orient.get_opposite():
+        if (
+            actor_orient == my_orient
+            or actor_orient == my_orient.get_opposite()
+            or actor_orient == my_orient.get_left()
+        ):
             if self.__check_valid_empty_cell(left_loc):
                 return left_loc.or_else_raise().get_coord()
             elif self.__check_valid_empty_cell(right_loc):
                 return right_loc.or_else_raise().get_coord()
+            else:
+                return one_step_forward_coord
         elif actor_orient == my_orient.get_right():
-            if self.__check_valid_empty_cell(left_loc):
-                return left_loc.or_else_raise().get_coord()
-        elif actor_orient == my_orient.get_left():
             if self.__check_valid_empty_cell(right_loc):
                 return right_loc.or_else_raise().get_coord()
+            elif self.__check_valid_empty_cell(left_loc):
+                return left_loc.or_else_raise().get_coord()
+            else:
+                return one_step_forward_coord
         return VWCoord(-1, -1)
 
     def __ask_agent_to_go(
@@ -295,14 +314,15 @@ class ZigZagMind(VWActorMindSurrogate):
     ) -> None:
         # find a spot for actor to go
         goto: VWCoord = self.__find_cell_for_agent(
-            actor.get_orientation(),
             self.get_own_orientation(),
+            actor.get_orientation(),
             observation.get_forwardleft(),
             observation.get_forwardright(),
         )
+        
         if goto != VWCoord(-1, -1):
             instruction: dict[str, str | list[str]] = {
-                "command": ["movebitch"],
+                "command": ["getout"],
                 "goto": [f"{goto.get_x()},{goto.get_y()}"],
             }
             self.__add_message(actor.get_id(), json.dumps(instruction))
@@ -533,7 +553,6 @@ class ZigZagMind(VWActorMindSurrogate):
 
         return [VWIdleAction()]
 
-    # todo
     def __help_clean(self) -> Iterable[VWAction]:
         action: list[VWAction] = []
 
@@ -582,22 +601,26 @@ class CleanerMind(VWActorMindSurrogate):
         for m in self.get_latest_received_messages():
             message_content: dict[str, list[str]] = json.loads(str(m.get_content()))
             if message_content.get("command") and message_content["command"]:
-                if message_content["command"][0] == "rollcall":
-                    self.__master_id = m.get_sender_id()
-                    self.__should_take_roll = True
+                self.__understand_command(m)
 
-                if message_content["command"][0] == "movebitch":
-                    goto: list[str] = message_content["goto"]
-                    x, y = goto[0].split(",")
-                    self.__coord_to_go = VWCoord(int(x), int(y))
+    def __understand_command(self, m: BccMessage) -> None:
+        message_content: dict[str, list[str]] = json.loads(str(m.get_content()))
+        if message_content["command"][0] == "rollcall":
+            self.__master_id = m.get_sender_id()
+            self.__should_take_roll = True
 
-                if message_content["command"][0] == "clean":
-                    colour: str = str(self.get_own_colour())
-                    coords_list: list[str] = message_content[colour]
-                    self.__save_coords(coords_list)
+        if message_content["command"][0] == "getout":
+            goto: list[str] = message_content["goto"]
+            x, y = goto[0].split(",")
+            self.__coord_to_go = VWCoord(int(x), int(y))
 
-                if message_content["command"][0] == "ignore":
-                    self.__ignore_coord(message_content["coord"][0])
+        if message_content["command"][0] == "clean":
+            colour: str = str(self.get_own_colour())
+            coords_list: list[str] = message_content[colour]
+            self.__save_coords(coords_list)
+
+        if message_content["command"][0] == "ignore":
+            self.__ignore_coord(message_content["coord"][0])
 
     def __ignore_coord(self, coord: str) -> None:
         x, y = coord.split(",")
