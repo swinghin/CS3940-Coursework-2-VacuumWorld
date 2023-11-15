@@ -269,6 +269,12 @@ class ZigZagMind(VWActorMindSurrogate):
         # add their descriptions to agent list
         for message in self.get_latest_received_messages():
             message_content: dict[str, str] = json.loads(str(message.get_content()))
+            # now loop through agent list,
+            # if id match update coord,
+            # if no id match, add to agent list
+            for agent in self.__agent_list:
+              if message_content["id"]==agent["id"]:
+                agent["coord"]=message_content["coord"]
             if message_content not in self.__agent_list:
                 self.__agent_list.append(message_content)
 
