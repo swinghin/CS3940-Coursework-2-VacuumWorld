@@ -82,10 +82,12 @@ class ZigZagMind(VWActorMindSurrogate):
         self.__coord_to_go: VWCoord = VWCoord(-1, -1)
         # Next target orientation
         self.__direction_to_go: VWOrientation = VWOrientation.north
-        # Whether this agent should clean the current cell
-        self.__should_clean: bool = False
-        # Store what colour dirt this agent is looking to clean
-        self.__now_cleaning_colour: str = ""
+
+        # Stores where the next dirt to be cleaned by two agents
+        self.__next_dirt_loc: dict[str, VWCoord] = {
+            "orange": VWCoord(-1, -1),
+            "green": VWCoord(-1, -1),
+        }
 
     ### REVISE FUNCTIONS ###
 
@@ -250,13 +252,13 @@ class ZigZagMind(VWActorMindSurrogate):
                     self.__dirt_loc["green"].append(f"{x},{y}")
 
         # prepare the announcement as a dictionary
-        announcement: dict[str, list[str]] = {
-            "command": ["clean"],
-            "orange": self.__dirt_loc["orange"],
-            "green": self.__dirt_loc["green"],
-        }
+        # announcement: dict[str, list[str]] = {
+        #     "command": ["clean"],
+        #     "orange": self.__dirt_loc["orange"],
+        #     "green": self.__dirt_loc["green"],
+        # }
         # set the announcement as string to self variable to be sent
-        self.__announcement = json.dumps(announcement)
+        # self.__announcement = json.dumps(announcement)
 
         # set this flag to true so this process wouldn't happen again
         self.__announced_dirt_loc = True
@@ -269,8 +271,15 @@ class ZigZagMind(VWActorMindSurrogate):
         # add their descriptions to agent list
         for message in self.get_latest_received_messages():
             message_content: dict[str, str] = json.loads(str(message.get_content()))
-            if message_content not in self.__agent_list:
-                self.__agent_list.append(message_content)
+            if message_content["type"] == "aboutme":
+                # now loop through agent list,
+                # if id match update coord,
+                # if no id match, add to agent list
+                for agent in self.__agent_list:
+                    if message_content["id"] == agent["id"]:
+                        agent["coord"] = message_content["coord"]
+                if message_content not in self.__agent_list:
+                    self.__agent_list.append(message_content)
 
     def __prepare_roll_call(self) -> None:
         # prepare an announcement that tells commands orange and green to take roll
@@ -307,6 +316,20 @@ class ZigZagMind(VWActorMindSurrogate):
             one_step_forward_coord = VWCoord(own_pos.get_x(), (own_pos.get_y() - 2))
 
         return one_step_forward_coord
+
+    def __find_behind_coord(self) -> VWCoord:
+        own_pos: VWCoord = self.get_own_position()
+        my_orient = self.get_own_orientation()
+        if my_orient == VWOrientation.east:
+            behind_coord = VWCoord(own_pos.get_x() - 1, (own_pos.get_y()))
+        elif my_orient == VWOrientation.south:
+            behind_coord = VWCoord(own_pos.get_x(), (own_pos.get_y() - 1))
+        elif my_orient == VWOrientation.west:
+            behind_coord = VWCoord(own_pos.get_x() + 1, (own_pos.get_y()))
+        else:
+            behind_coord = VWCoord(own_pos.get_x(), (own_pos.get_y() + 1))
+
+        return behind_coord
 
     def __find_cell_for_agent(
         self,
@@ -383,19 +406,42 @@ class ZigZagMind(VWActorMindSurrogate):
             # after asking, set cooldown to 2 (cycles)
             self.__ask_agent_cooldown = 2
 
-    def __listen_dirt_update(self) -> None:
-        # check messages, see if any agents report dirt cleaned
+    def __listen_messages(self) -> None:
+        # check messages, see if any agents report dirt cleaned, or request self to move
         for message in self.get_latest_received_messages():
             message_content: dict[str, str] = json.loads(str(message.get_content()))
-            colour: str = message_content["colour"]
-            coord = message_content["coord"]
-            # if agent reports dirt cleaned, remove from own list of dirt location
-            if coord in self.__dirt_loc[colour]:
-                self.__dirt_loc[colour].remove(coord)
-
+            if message_content["type"] == "aboutme":
+                self.__listen_dirt_update(message_content)
+            elif message_content["type"] == "moverequest":
+                self.__coord_to_go = self.__find_cell_for_self()
         # if no more dirt left, leave revise stage 2 (stage 3 is idle)
         if not self.__dirt_loc["orange"] and not self.__dirt_loc["green"]:
             self.__stage = 3
+
+    def __listen_dirt_update(self, message_content: dict[str, str]) -> None:
+        colour: str = message_content["colour"]
+        coord = message_content["coord"]
+        # if agent reports dirt cleaned, remove from own list of dirt location
+        if coord in self.__dirt_loc[colour]:
+            self.__dirt_loc[colour].remove(coord)
+            self.__next_dirt_loc[colour] = VWCoord(-1, -1)
+
+    def __find_cell_for_self(self) -> VWCoord:
+        # tries to find and return an empty spot for self to go
+
+        forward_loc = self.get_latest_observation().get_forward()
+        left_loc = self.get_latest_observation().get_left()
+        right_loc = self.get_latest_observation().get_right()
+
+        # find empty forwardleft, forwardright, or forwardforward cell
+        if self.__check_valid_empty_cell(forward_loc):
+            return forward_loc.or_else_raise().get_coord()
+        elif self.__check_valid_empty_cell(left_loc):
+            return left_loc.or_else_raise().get_coord()
+        elif self.__check_valid_empty_cell(right_loc):
+            return right_loc.or_else_raise().get_coord()
+        else:
+            return self.__find_behind_coord()
 
     def __calc_direction_to_go(self) -> VWOrientation:
         now_coord: VWCoord = self.get_own_position()
@@ -430,73 +476,74 @@ class ZigZagMind(VWActorMindSurrogate):
         distance = math.sqrt(delta_x**2 + delta_y**2)
         return distance
 
-    def __calc_colour_to_clean(self) -> None:
-        # choose colour to clean based on number of remaining dirt of each colour
-        self.__now_cleaning_colour = (
-            "orange"
-            if len(self.__dirt_loc["orange"]) > len(self.__dirt_loc["green"])
-            else "green"
-        )
+    def __ask_agent_to_clean(self, agent: dict[str, str], coord: VWCoord) -> None:
+        # set up message to ask the agent to clean
+        instruction: dict[str, str | list[str]] = {
+            "command": ["clean"],
+            agent["colour"]: [f"{coord.get_x()},{coord.get_y()}"],
+        }
+        print(f"asking {agent['colour']} to clean {coord}")
+        self.__add_message(agent["id"], json.dumps(instruction))
 
-    def __get_nearest_coord(self) -> VWCoord:
+    def __get_agent_by_colour(self, colour: str) -> dict[str, str]:
+        # return an agent matching a given colour
+        for agent in self.__agent_list:
+            if agent["colour"] == colour:
+                return agent
+        return {}
+
+    def __get_nearest_coord(self, colour: str) -> VWCoord:
         # find and return the nearest dirt of the colour currently cleaning
         nearest_coord: VWCoord = VWCoord(-1, -1)
         nearest_distance: float = math.inf
 
-        agent_coord = self.get_own_position()
+        # if an agent of given colour is found, get its coord
+        agent_coord: VWCoord = VWCoord(-1, -1)
+        agent = self.__get_agent_by_colour(colour)
+        print(agent)
+        if agent:
+            agent_x, agent_y = agent["coord"].split(",")
+            agent_coord = VWCoord(int(agent_x), int(agent_y))
 
-        # choose a colour to clean
-        self.__calc_colour_to_clean()
-
-        # loop through all dirt currently cleaning, find the nearest dirt coord
-        for dirt_coord in self.__dirt_loc[self.__now_cleaning_colour]:
-            x, y = dirt_coord.split(",")
-            dirt_vwcoord: VWCoord = VWCoord(int(x), int(y))
-            dirt_distance: float = self.__get_coord_distance(agent_coord, dirt_vwcoord)
-            if dirt_distance < nearest_distance:
-                nearest_distance = dirt_distance
-                nearest_coord = dirt_vwcoord
+        # if agent coord is valid
+        if agent_coord != VWCoord(-1, -1):
+            # loop through all dirt currently cleaning, find the nearest dirt coord
+            for dirt_coord in self.__dirt_loc[colour]:
+                x, y = dirt_coord.split(",")
+                dirt_vwcoord: VWCoord = VWCoord(int(x), int(y))
+                dirt_distance: float = self.__get_coord_distance(
+                    agent_coord, dirt_vwcoord
+                )
+                if dirt_distance < nearest_distance:
+                    nearest_distance = dirt_distance
+                    nearest_coord = dirt_vwcoord
 
         return nearest_coord
 
-    def __find_coord_to_go(self) -> None:
-        # find another dirt location to go clean
-        self.__coord_to_go = self.__get_nearest_coord()
+    def __assign_dirt(self, colour: str) -> None:
+        # find nearest dirt a given coloured agent should clean,
+        # then ask it to clean the nearest dirt
+        self.__next_dirt_loc[colour] = self.__get_nearest_coord(colour)
+        self.__ask_agent_to_clean(
+            self.__get_agent_by_colour(colour), self.__next_dirt_loc[colour]
+        )
 
-    def __prepare_help(self) -> None:
+    def __update_dirt(self) -> None:
+        # find dirt for orange and green if they have cleaned previous
+        if self.__dirt_loc["orange"] and self.__next_dirt_loc["orange"] == VWCoord(
+            -1, -1
+        ):
+            self.__assign_dirt("orange")
+        elif self.__dirt_loc["green"] and self.__next_dirt_loc["green"] == VWCoord(
+            -1, -1
+        ):
+            self.__assign_dirt("green")
+
+    def __prepare_move(self) -> None:
         # if not yet arrived at target coordinate
         if self.get_own_position() != self.__coord_to_go:
-            # if target coordinate is invalid, find somewhere to go
-            if self.__coord_to_go == VWCoord(-1, -1):
-                self.__find_coord_to_go()
-            # then, find which direction to go
+            # find which direction to go
             self.__direction_to_go = self.__calc_direction_to_go()
-        # if arrived at target coordinate
-        else:
-            # first check if target coordinate has dirt, if so, it needs to be cleaned
-            if self.get_latest_observation().get_center().or_else_raise().has_dirt():
-                self.__should_clean = True
-            # if no dirt, remove current coordinate from cleaning list,
-            # tell master this place is cleaned, then
-            # find another place to go
-            else:
-                self_coord = f"{self.get_own_position().get_x()},{self.get_own_position().get_y()}"
-                if self_coord in self.__dirt_loc[self.__now_cleaning_colour]:
-                    self.__dirt_loc[self.__now_cleaning_colour].remove(self_coord)
-                self.__should_clean = False
-                self.__find_coord_to_go()
-
-    def __ask_agent_to_ignore(self) -> None:
-        # after deciding a dirt to clean,
-        # tell the cooresponding colour agent to ignore that spot
-        instruction: dict[str, str | list[str]] = {
-            "command": ["ignore"],
-            "coord": [f"{self.__coord_to_go.get_x()},{self.__coord_to_go.get_y()}"],
-        }
-        # prepare to send the instruction to the agents of said colour
-        for agent in self.__agent_list:
-            if agent["colour"] == self.__now_cleaning_colour:
-                self.__add_message(agent["id"], json.dumps(instruction))
 
     def revise(self) -> None:
         # clear announcement for each revise
@@ -509,7 +556,6 @@ class ZigZagMind(VWActorMindSurrogate):
         # if agent list populated, detect obstacle and ask them to move if needed
         else:
             self.__detect_obstacle()
-            self.__prepare_message()
 
         if self.__stage == 1:
             self.__revise_stage_1()
@@ -522,18 +568,20 @@ class ZigZagMind(VWActorMindSurrogate):
             if not self.__announced_dirt_loc:
                 self.__revise_stage_2()
 
-            # listen for agents reporting cleaned dirt
-            self.__listen_dirt_update()
+            # listen for agents reporting cleaned dirt,
+            # or request self to move
+            self.__listen_messages()
 
-            # prepare self to clean next dirt
-            self.__prepare_help()
+            # find and assign dirt to agents if neccessary
+            self.__update_dirt()
 
-            # ask agent to ignore cleaned dirt if needed
-            self.__ask_agent_to_ignore()
+            self.__prepare_move()
 
             print(
-                f"white at {self.get_own_position()} facing {self.get_own_orientation()} going {self.__coord_to_go} towards {self.__direction_to_go}, now cleaning {self.__now_cleaning_colour}, should clean={self.__should_clean}"
+                f"white at {self.get_own_position()} facing {self.get_own_orientation()} going {self.__coord_to_go} towards {self.__direction_to_go}"
             )
+
+        self.__prepare_message()
 
     ### DECIDE FUNCTIONS ###
 
@@ -581,9 +629,6 @@ class ZigZagMind(VWActorMindSurrogate):
         # if own position is already at coord, do nothing
         return VWIdleAction()
 
-    def __clean(self) -> VWAction:
-        return VWCleanAction()
-
     def __explore(self) -> Iterable[VWAction]:
         # after scan started, go left and start scanning
         # if scan_pass is even go west, odd go east, if intermission scan go north
@@ -620,13 +665,14 @@ class ZigZagMind(VWActorMindSurrogate):
 
         return [VWIdleAction()]
 
-    def __help_clean(self) -> Iterable[VWAction]:
+    def __supervise(self) -> Iterable[VWAction]:
         # returns a iterable action list
         action: list[VWAction] = []
 
-        # if arrived at target coord and should clean, append clean action
-        if self.get_own_position() == self.__coord_to_go and self.__should_clean:
-            action.append(self.__clean())
+        print(self.get_own_position(), self.__coord_to_go)
+        # if arrived at target coord, append idle action
+        if self.get_own_position() == self.__coord_to_go:
+            action.append(VWIdleAction())
         # else if target coord is valid, go to target coord
         elif self.__coord_to_go != VWCoord(-1, -1):
             action.append(self.__goto_coord(self.__coord_to_go))
@@ -644,7 +690,7 @@ class ZigZagMind(VWActorMindSurrogate):
 
     def decide(self) -> Iterable[VWAction]:
         if self.__stage == 2:
-            return self.__help_clean()
+            return self.__supervise()
         elif self.__stage == 1:
             return self.__explore()
         elif self.__stage == 0:
@@ -672,22 +718,57 @@ class CleanerMind(VWActorMindSurrogate):
         # list of dirt locations to clean
         self.__coords_to_clean: list[VWCoord] = []
 
+        # Store message to send this cycle, tuple of agent id and message
+        self.__next_message: tuple[str, str] = ("", "")
+        # Dictinoary of queued messages, agent id as key and message string as value
+        self.__queued_messages: dict[str, str] = {}
+        # If requested agent to move, set to 2, auto decrement by one each revise.
+        self.__request_cooldown: int = 0
+
     def __listen_for_command(self) -> None:
         # loop through all received messages
         for m in self.get_latest_received_messages():
-            message_content: dict[str, list[str]] = json.loads(str(m.get_content()))
+            message_content: dict[str, str | list[str]] = json.loads(
+                str(m.get_content())
+            )
             # check if message contains command, then pass message to function
             if message_content.get("command") and message_content["command"]:
                 self.__understand_command(m)
+            elif (
+                message_content.get("type") and message_content["type"] == "moverequest"
+            ):
+                self.__coord_to_go = self.__find_cell_for_self()
+
+    def __check_valid_empty_cell(self, location: PyOptional[VWLocation]) -> bool:
+        # check is cell is valid and has no actor
+        return not location.is_empty() and not location.or_else_raise().has_actor()
+
+    def __find_cell_for_self(self) -> VWCoord:
+        # tries to find and return an empty spot for self to go
+
+        forward_loc = self.get_latest_observation().get_forward()
+        left_loc = self.get_latest_observation().get_left()
+        right_loc = self.get_latest_observation().get_right()
+
+        # find empty forwardleft, forwardright, or forwardforward cell
+        if self.__check_valid_empty_cell(forward_loc):
+            return forward_loc.or_else_raise().get_coord()
+        elif self.__check_valid_empty_cell(left_loc):
+            return left_loc.or_else_raise().get_coord()
+        elif self.__check_valid_empty_cell(right_loc):
+            return right_loc.or_else_raise().get_coord()
+        else:
+            return VWCoord(-1, -1)
 
     def __understand_command(self, m: BccMessage) -> None:
-        # check what type of command message 
+        # check what type of command message
         message_content: dict[str, list[str]] = json.loads(str(m.get_content()))
-        
+
         # rollcall means need to reply to other agent with info about self
         if message_content["command"][0] == "rollcall":
             self.__master_id = m.get_sender_id()
             self.__should_take_roll = True
+            self.__prepare_take_roll()
 
         # getout means agent needs to move out of another agent's way
         if message_content["command"][0] == "getout":
@@ -718,7 +799,7 @@ class CleanerMind(VWActorMindSurrogate):
             self.__coords_to_clean.remove(coord_to_ignore)
 
     def __save_coords(self, coords_list: list[str]) -> None:
-        # for each coord in passed in list, 
+        # for each coord in passed in list,
         # create VWCoord object and store in cleaning list
         for coord in coords_list:
             x, y = coord.split(",")
@@ -728,7 +809,6 @@ class CleanerMind(VWActorMindSurrogate):
 
     def __calc_direction_to_go(self) -> VWOrientation:
         now_coord: VWCoord = self.get_own_position()
-        now_orientation: VWOrientation = self.get_own_orientation()
         delta_x: int = self.__coord_to_go.get_x() - now_coord.get_x()
         delta_y: int = self.__coord_to_go.get_y() - now_coord.get_y()
 
@@ -739,45 +819,77 @@ class CleanerMind(VWActorMindSurrogate):
         elif delta_y == 0:
             return VWOrientation.west if delta_x < 0 else VWOrientation.east
 
-        # if not same axis as target, set target direction acoording to delta x,y
-        if (
-            now_orientation == VWOrientation.north
-            or now_orientation == VWOrientation.south
-        ):
-            return VWOrientation.north if delta_y < 0 else VWOrientation.south
+        # if dirt is west of agent
+        if delta_x < 0:
+            return VWOrientation.west
+        elif delta_y < 0:
+            return VWOrientation.north
+        elif delta_x > 0:
+            return VWOrientation.east
         else:
-            return VWOrientation.west if delta_x < 0 else VWOrientation.east
-
-    def __get_coord_distance(
-        self,
-        agent_coord: VWCoord,
-        target_coord: VWCoord,
-    ) -> float:
-        # use pythagorean theorem to get distance between agent and target cell
-        delta_x: int = agent_coord.get_x() - target_coord.get_x()
-        delta_y: int = agent_coord.get_y() - target_coord.get_y()
-        distance = math.sqrt(delta_x**2 + delta_y**2)
-        return distance
-
-    def __get_nearest_coord(self) -> VWCoord:
-        # find and return the nearest dirt to clean
-        nearest_coord: VWCoord = VWCoord(-1, -1)
-        nearest_distance: float = math.inf
-
-        agent_coord = self.get_own_position()
-
-        # loop through all dirt currently cleaning, find the nearest dirt coord
-        for dirt_coord in self.__coords_to_clean:
-            dirt_distance: float = self.__get_coord_distance(agent_coord, dirt_coord)
-            if dirt_distance < nearest_distance:
-                nearest_distance = dirt_distance
-                nearest_coord = dirt_coord
-
-        return nearest_coord
+            return VWOrientation.south
 
     def __find_coord_to_go(self) -> None:
         # find another dirt location to go clean
-        self.__coord_to_go = self.__get_nearest_coord()
+        # nearest coord will always be first and supposedly only item in cleaning list
+        self.__coord_to_go = (
+            self.__coords_to_clean[0] if self.__coords_to_clean else VWCoord(-1, -1)
+        )
+
+    def __check_agent_in_cell(self, location: PyOptional[VWLocation]) -> bool:
+        # check is cell is valid and has actor
+        return not location.is_empty() and location.or_else_raise().has_actor()
+
+    def __add_message(self, actor_id: str, message: str) -> None:
+        # add given message to given actor id slot in queued messages
+        self.__queued_messages[actor_id] = message
+
+    def __prepare_message(self) -> None:
+        # if there are queued messages, get first message, remove it from queue
+        # then set it as next message
+        if self.__queued_messages:
+            self.__next_message = list(self.__queued_messages.items())[0]
+            agent_id = self.__next_message[0]
+            del self.__queued_messages[agent_id]
+        # else clear next message
+        else:
+            self.__next_message = ("", "")
+
+    def __prepare_take_roll(self) -> None:
+        # get own position and build roll call message and send to white
+        position = self.get_own_position()
+        message: dict[str, str] = {
+            "type": "aboutme",
+            "id": self.get_own_id(),
+            "colour": str(self.get_own_colour()),
+            "coord": f"{position.get_x()},{position.get_y()}",
+        }
+        self.__add_message(self.__master_id, json.dumps(message))
+
+    def __prepare_request_to_move(self, actor: VWActorAppearance) -> None:
+        # set up message to ask the agent to move
+        request: dict[str, str] = {"type": "moverequest"}
+        print(f"request {actor.get_colour()} to move")
+        self.__add_message(actor.get_id(), json.dumps(request))
+        self.__should_take_roll = True
+
+    def __detect_obstacle(self) -> None:
+        # observe forward cell and detect if agent in front, if so, ask agent to move out
+        observation: VWObservation = self.get_latest_observation()
+        forward_location: PyOptional[VWLocation] = observation.get_forward()
+
+        # each cycle decrease cooldown
+        self.__request_cooldown -= 1
+
+        if self.__request_cooldown <= 0 and self.__check_agent_in_cell(
+            forward_location
+        ):
+            actor: VWActorAppearance = (
+                forward_location.or_else_raise().get_actor_appearance().or_else_raise()
+            )
+            self.__prepare_request_to_move(actor)
+            # after asking, set cooldown to 2 (cycles)
+            self.__request_cooldown = 2
 
     def revise(self) -> None:
         self.__should_clean = False
@@ -793,6 +905,7 @@ class CleanerMind(VWActorMindSurrogate):
                 self.__find_coord_to_go()
             # then, find which direction to go
             self.__direction_to_go = self.__calc_direction_to_go()
+            self.__detect_obstacle()
         # if arrived at target coordinate
         else:
             # first check if target coordinate has dirt, if so, it needs to be cleaned
@@ -805,11 +918,15 @@ class CleanerMind(VWActorMindSurrogate):
                 if self.get_own_position() in self.__coords_to_clean:
                     self.__coords_to_clean.remove(self.get_own_position())
                     self.__should_take_roll = True
+                    self.__prepare_take_roll()
                     self.__should_clean = False
             self.__find_coord_to_go()
 
+        # prepare to send message if any
+        self.__prepare_message()
+
         print(
-            f"{self.get_own_colour()} at {self.get_own_position()} facing {self.get_own_orientation()} going {self.__coord_to_go} towards {self.__direction_to_go}, should clean={self.__should_clean}"
+            f"{self.get_own_colour()} at {self.get_own_position()} facing {self.get_own_orientation()} going {self.__coord_to_go} towards {self.__direction_to_go}, should clean={self.__should_clean}, queue={[str(c) for c in self.__coords_to_clean]}"
         )
 
     ### DECIDE FUNCTIONS ###
@@ -832,28 +949,26 @@ class CleanerMind(VWActorMindSurrogate):
         # if own position is already at coord, do nothing
         return [VWIdleAction()]
 
-    def __take_roll(self) -> Iterable[VWAction]:
-        # get own position and build roll call message and send to white
-        position = self.get_own_position()
-        about_me: dict[str, str] = {
-            "id": self.get_own_id(),
-            "colour": str(self.get_own_colour()),
-            "coord": f"{position.get_x()},{position.get_y()}",
-        }
-        return [
-            VWSpeakAction(
-                message=json.dumps(about_me),
-                recipients=[self.__master_id],
-                sender_id=self.get_own_id(),
-            )
-        ]
+    def __whisper(self, recipient_id: str, message: str) -> VWAction:
+        return VWSpeakAction(
+            message=message,
+            recipients=[recipient_id],
+            sender_id=self.get_own_id(),
+        )
+
+    def __send_message(self) -> Iterable[VWAction]:
+        # check if anything to speak to agents
+        if self.__next_message:
+            agent_id, message = self.__next_message
+            return [self.__whisper(agent_id, message)]
+        return [VWIdleAction()]
 
     def __clean(self) -> Iterable[VWAction]:
         return [VWCleanAction()]
 
     def decide(self) -> Iterable[VWAction]:
         if self.__should_take_roll and self.__master_id:
-            return self.__take_roll()
+            return self.__send_message()
 
         if self.get_own_position() == self.__coord_to_go and self.__should_clean:
             return self.__clean()
