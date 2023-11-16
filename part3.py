@@ -417,7 +417,7 @@ class ZigZagMind(VWActorMindSurrogate):
             self.__next_dirt_loc[colour] = VWCoord(-1, -1)
 
     def __find_cell_for_self(self) -> VWCoord:
-        # tries to find and return an empty spot for self to go
+        # tries to find and return an empty spot for self to go when requested
 
         forward_loc = self.get_latest_observation().get_forward()
         left_loc = self.get_latest_observation().get_left()
@@ -565,12 +565,14 @@ class ZigZagMind(VWActorMindSurrogate):
             # find and assign dirt to agents if neccessary
             self.__update_dirt()
 
+            # if requested to move find where to go
             self.__prepare_move()
 
             print(
                 f"white at {self.get_own_position()} facing {self.get_own_orientation()} going {self.__coord_to_go} towards {self.__direction_to_go}"
             )
 
+        # assign message to send this cycle
         self.__prepare_message()
 
     ### DECIDE FUNCTIONS ###
@@ -724,6 +726,7 @@ class CleanerMind(VWActorMindSurrogate):
             # check if message contains command, then pass message to function
             if message_content.get("command") and message_content["command"]:
                 self.__understand_command(m)
+            # if requested to move, find a cell to go and set as target
             elif (
                 message_content.get("type") and message_content["type"] == "moverequest"
             ):
@@ -871,6 +874,7 @@ class CleanerMind(VWActorMindSurrogate):
         # each cycle decrease cooldown
         self.__request_cooldown -= 1
 
+        # if agent ahead and cooldown time cleared, request agent to move
         if self.__request_cooldown <= 0 and self.__check_agent_in_cell(
             forward_location
         ):
