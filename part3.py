@@ -251,16 +251,6 @@ class ZigZagMind(VWActorMindSurrogate):
                 if self.__map[x][y] == 2:
                     self.__dirt_loc["green"].append(f"{x},{y}")
 
-        # prepare the announcement as a dictionary
-        # announcement: dict[str, list[str]] = {
-        #     "command": ["clean"],
-        #     "orange": self.__dirt_loc["orange"],
-        #     "green": self.__dirt_loc["green"],
-        # }
-        # set the announcement as string to self variable to be sent
-        # self.__announcement = json.dumps(announcement)
-
-        # set this flag to true so this process wouldn't happen again
         self.__announced_dirt_loc = True
 
     def __clear_announcement(self) -> None:
@@ -433,7 +423,7 @@ class ZigZagMind(VWActorMindSurrogate):
         left_loc = self.get_latest_observation().get_left()
         right_loc = self.get_latest_observation().get_right()
 
-        # find empty forwardleft, forwardright, or forwardforward cell
+        # find empty forwardleft, forwardright, forwardforward cell or backwards
         if self.__check_valid_empty_cell(forward_loc):
             return forward_loc.or_else_raise().get_coord()
         elif self.__check_valid_empty_cell(left_loc):
@@ -445,7 +435,6 @@ class ZigZagMind(VWActorMindSurrogate):
 
     def __calc_direction_to_go(self) -> VWOrientation:
         now_coord: VWCoord = self.get_own_position()
-        now_orientation: VWOrientation = self.get_own_orientation()
         delta_x: int = self.__coord_to_go.get_x() - now_coord.get_x()
         delta_y: int = self.__coord_to_go.get_y() - now_coord.get_y()
 
@@ -456,15 +445,16 @@ class ZigZagMind(VWActorMindSurrogate):
         elif delta_y == 0:
             return VWOrientation.west if delta_x < 0 else VWOrientation.east
 
-        # if not same axis as target, set target direction acoording to delta x,y
-        if (
-            now_orientation == VWOrientation.north
-            or now_orientation == VWOrientation.south
-        ):
-            return VWOrientation.north if delta_y < 0 else VWOrientation.south
+        # if dirt is west of agent
+        if delta_x < 0:
+            return VWOrientation.west
+        elif delta_y < 0:
+            return VWOrientation.north
+        elif delta_x > 0:
+            return VWOrientation.east
         else:
-            return VWOrientation.west if delta_x < 0 else VWOrientation.east
-
+            return VWOrientation.south
+          
     def __get_coord_distance(
         self,
         agent_coord: VWCoord,
